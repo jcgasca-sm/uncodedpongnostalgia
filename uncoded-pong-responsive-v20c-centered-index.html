@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Uncoded Pong - Responsive v20c + UI centrada</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    :root{
+      --frame:#b084f5;        /* lila del marco */
+      --pink:#FF2C9C;         /* barra jugador */
+      --mint:#98FF98;         /* barra IA */
+      --txt:#fff;
+      --bg:#000;
+    }
+
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--txt);
+      font-family: 'Press Start 2P', monospace;
+      text-align: center;
+    }
+
+    #scoreboard, #instructions{
+      margin: 10px 0;
+      font-size: 10px;
+    }
+
+    #game-container{
+      position: relative;
+      width: 90vw;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    canvas{
+      display: block;
+      margin: 0 auto;
+      background: #000;               /* cancha negra */
+      border: 8px solid var(--frame); /* marco lila */
+      border-radius: 10px;
+      box-shadow: 0 0 20px var(--frame);
+      height: auto;
+      width: 90vw;
+      max-width: 720px;
+      aspect-ratio: 4 / 3;
+    }
+
+    /* ---------- Win overlay centrado ---------- */
+    #winWrap{
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%,-50%);
+      width: 85%;
+      display: none;           /* solo visible al terminar */
+      text-align: center;
+      pointer-events: none;    /* el botón internamente activa puntero */
+    }
+
+    /* Logo (solo al ganar) */
+    #logo{
+      width: 140px;
+      display: block;
+      margin: 0 auto 12px auto;
+      opacity: 0;
+      transform: scale(0.8);
+      pointer-events: none;
+    }
+
+    #winMsg{
+      color: var(--txt);
+      margin: 6px 0 10px 0;
+      font-size: clamp(12px, 2.6vw, 18px); /* más grande, responsive */
+      line-height: 1.6;
+    }
+
+    /* Botón restart */
+    #restartBtn{
+      display: inline-block;
+      pointer-events: auto;
+      padding: 10px 14px;
+      background: var(--frame);
+      border: none;
+      color: #000;
+      font-family: 'Press Start 2P', monospace;
+      cursor: pointer;
+      border-radius: 6px;
+      font-size: clamp(10px, 2vw, 12px);
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    #restartBtn:hover{ filter: brightness(1.1); }
+
+    /* ---------- Animaciones ---------- */
+    @keyframes fadeInUp{
+      0%   { opacity: 0; transform: translateY(8px) scale(0.98); }
+      100% { opacity: 1; transform: translateY(0)   scale(1); }
+    }
+    @keyframes popIn{
+      0%   { opacity: 0; transform: scale(0.6); }
+      60%  { opacity: 1; transform: scale(1.15); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes fadeOutDown{
+      0%   { opacity: 1; transform: translateY(0)   scale(1); }
+      100% { opacity: 0; transform: translateY(8px) scale(0.98); }
+    }
+    @keyframes shrinkOut{
+      0%   { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(0.6); }
+    }
+
+    .fade-in   { animation: fadeInUp 350ms ease-out forwards; }
+    .fade-out  { animation: fadeOutDown 280ms ease-in forwards; }
+    .logo-in   { animation: popIn 650ms ease-out forwards; }
+    .logo-out  { animation: shrinkOut 300ms ease-in forwards; }
+
+  </style>
+</head>
+<body>
+  <div id="scoreboard">Player: 0 | AI: 0</div>
+
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Overlay final: logo + mensaje + botón centrados -->
+    <div id="winWrap">
+      <img id="logo"
+        src="https://cdn.shopify.com/s/files/1/0590/5583/3260/files/pixel_art_large_01eb3c2a-6722-418d-abfa-921e22e2c9a7.png?v=1754589799"
+        alt="Uncoded Logo"
+      />
+      <div id="winMsg"></div>
+      <button id="restartBtn">RESTART</button>
+    </div>
+  </div>
+
+  <div id="instructions">First to 10 wins!</div>
+
+  <script>
+    const canvas      = document.getElementById("gameCanvas");
+    const ctx         = canvas.getContext("2d");
+    const scoreboard  = document.getElementById("scoreboard");
+
+    const winWrap     = document.getElementById("winWrap");
+    const logoEl      = document.getElementById("logo");
+    const winMsgEl    = document.getElementById("winMsg");
+    const restartBtn  = document.getElementById("restartBtn");
+
+    /* ====== Tamaño / unidades responsivas ====== */
+    function resizeCanvas(){
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetWidth * 3/4;
+    }
+    resizeCanvas();
+    window.addEventListener("resize", () => { resizeCanvas(); recalcUnits(); });
+
+    let unit = 1;
+    function su(x){ return x * unit; }
+    function recalcUnits(){
+      unit = canvas.width / 640;
+      paddleHeight = su(100);
+      paddleWidth  = su(10);
+      ball.radius  = su(7);
+    }
+
+    /* ====== Estado (idéntico a v20c original) ====== */
+    let paddleHeight, paddleWidth, playerY, aiY, playerScore, aiScore, winScore, gameOver;
+    const PLAYER_COLOR = "#FF2C9C";
+    const AI_COLOR     = "#98FF98";
+    const NET_COLOR    = "#b084f5";
+
+    const ball = { x: 0, y: 0, radius: 7, dx: 0, dy: 0 };
+
+    function initGame(){
+      recalcUnits();
+      playerY = canvas.height/2;
+      aiY     = canvas.height/2;
+
+      ball.x  = canvas.width/2;
+      ball.y  = canvas.height/2;
+      ball.dx = su(3.5) * (Math.random() > 0.5 ? 1 : -1);
+      ball.dy = su(3.5) * (Math.random() > 0.5 ? 1 : -1);
+
+      playerScore = 0;
+      aiScore     = 0;
+      winScore    = 10;
+      gameOver    = false;
+
+      // Ocultar overlay
+      winWrap.style.display = "none";
+      logoEl.classList.remove('logo-in','logo-out');
+      winMsgEl.classList.remove('fade-in','fade-out');
+      restartBtn.classList.remove('fade-in','fade-out');
+      restartBtn.style.opacity = 0;
+
+      scoreboard.textContent = `Player: ${playerScore} | AI: ${aiScore}`;
+    }
+
+    // Control con mouse (rápido, exacto)
+    document.addEventListener("mousemove", e => {
+      const rect = canvas.getBoundingClientRect();
+      playerY = e.clientY - rect.top;
+    });
+
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      // línea central punteada
+      ctx.fillStyle = NET_COLOR;
+      for (let i=0; i<canvas.height; i+= su(30)){
+        ctx.fillRect(canvas.width/2 - su(1), i, su(2), su(15));
+      }
+
+      // palas
+      ctx.fillStyle = PLAYER_COLOR;
+      ctx.fillRect(su(10), playerY - paddleHeight/2, paddleWidth, paddleHeight);
+
+      ctx.fillStyle = AI_COLOR;
+      ctx.fillRect(canvas.width - su(10) - paddleWidth, aiY - paddleHeight/2, paddleWidth, paddleHeight);
+
+      // bola
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI*2);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+    }
+
+    function update(){
+      if (gameOver) return;
+
+      // bola
+      ball.x += ball.dx;
+      ball.y += ball.dy;
+
+      if (ball.y + ball.radius > canvas.height || ball.y - ball.radius < 0) {
+        ball.dy = -ball.dy;
+      }
+
+      // colisión jugador
+      if (
+        ball.x - ball.radius < su(10) + paddleWidth &&
+        ball.y > playerY - paddleHeight/2 &&
+        ball.y < playerY + paddleHeight/2
+      ){
+        ball.dx = Math.abs(ball.dx);
+        ball.x  = su(10) + paddleWidth + ball.radius;
+      }
+
+      // colisión IA
+      if (
+        ball.x + ball.radius > canvas.width - su(10) - paddleWidth &&
+        ball.y > aiY - paddleHeight/2 &&
+        ball.y < aiY + paddleHeight/2
+      ){
+        ball.dx = -Math.abs(ball.dx);
+        ball.x  = canvas.width - su(10) - paddleWidth - ball.radius;
+      }
+
+      // puntaje
+      if (ball.x - ball.radius < 0){ aiScore++;     resetBall(); }
+      else if (ball.x + ball.radius > canvas.width){ playerScore++; resetBall(); }
+
+      // IA (misma dificultad fácil)
+      const aiSpeed = su(2);
+      if (aiY < ball.y - su(15)) aiY += aiSpeed;
+      else if (aiY > ball.y + su(15)) aiY -= aiSpeed;
+
+      // marcador
+      scoreboard.textContent = `Player: ${playerScore} | AI: ${aiScore}`;
+
+      // fin de juego → mostrar overlay centrado
+      if (playerScore === winScore || aiScore === winScore){
+        gameOver = true;
+
+        winMsgEl.innerHTML = playerScore === winScore
+          ? '🙂 CONGRATS! YOU WON 10% DISCOUNT!<br/>USE CODE: <strong>NSTLG10</strong>'
+          : '🙁 Keep trying...';
+
+        winWrap.style.display = "block";
+        logoEl.classList.add('logo-in');
+        winMsgEl.classList.add('fade-in');
+        restartBtn.classList.add('fade-in');
+      }
+    }
+
+    function resetBall(){
+      ball.x  = canvas.width/2;
+      ball.y  = canvas.height/2;
+      ball.dx = su(3.5) * (Math.random() > 0.5 ? 1 : -1);
+      ball.dy = su(3.5) * (Math.random() > 0.5 ? 1 : -1);
+    }
+
+    function gameLoop(){
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Reiniciar manteniendo la misma física (sin tocar velocidades/IA)
+    restartBtn.addEventListener("click", () => {
+      // animaciones de salida del overlay
+      logoEl.classList.remove('logo-in');  logoEl.classList.add('logo-out');
+      winMsgEl.classList.remove('fade-in'); winMsgEl.classList.add('fade-out');
+      restartBtn.classList.remove('fade-in'); restartBtn.classList.add('fade-out');
+
+      const onEnd = () => {
+        restartBtn.removeEventListener('animationend', onEnd);
+        initGame();
+      };
+      restartBtn.addEventListener('animationend', onEnd);
+    });
+
+    // Start
+    initGame();
+    gameLoop();
+  </script>
+</body>
+</html>
